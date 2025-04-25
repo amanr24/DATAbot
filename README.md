@@ -65,7 +65,7 @@ pip install -r requirements.txt
 streamlit run src/app.py
 ```
 
-1. Enter your **Groq API key** in the sidebar to initialize the chatbot.
+1. Enter your **[Groq API key](https://console.groq.com/keys)** in the sidebar to initialize the chatbot.
 2. Upload one or more **CSV** files for structured analysis.
 3. Optionally upload **PDF** documents to enable PDF question answering.
 4. Choose between:
@@ -90,17 +90,18 @@ streamlit run src/app.py
 ├── src/
 │   ├── app.py                      # Main Streamlit app
 │   ├── multiagent_router.py        # Agent routing logic
-│   ├── python_run.py               # Code-execution & extraction utils
-│   ├── eda.py                      # EDA tools (narrative + Sweetviz)
-│   ├── eda_database_agent.py       # EDA & Visualization agent class
-│   ├── sql.py                      # DB metadata extraction
-│   ├── sql_database_agent.py       # SQL agent (generation + execution)
-│   ├── visualize_database_agent.py # Visualization helper
-│   ├── pdf_database_agent.py       # PDF RAG chain builder
-│   ├── dataframe.py                # DataFrame summary helper
-│   ├── voice_translator.py         # Whisper STT + translation
-│   └── tts_renderer.py             # Browser TTS integration
-│   └── dashboard.py                # Dashboard integration
+├── ├── tools/
+│   ├── ├── python_run.py               # Code-execution & extraction utils
+│   ├── ├── eda.py                      # EDA tools (narrative + Sweetviz)
+│   ├── ├── sql.py                      # DB metadata extraction
+│   ├── ├── dataframe.py                # DataFrame summary helper
+│   ├── ├── voice_translator.py         # Whisper STT + translation
+│   ├── ├── tts_renderer.py             # Browser TTS integration
+│   └── └── dashboard.py                # Dashboard integration
+├── ├── agents/
+│   ├── ├── eda_database_agent.py       # EDA & Visualization agent class
+│   ├── ├── sql_database_agent.py       # SQL agent (generation + execution)
+│   └── └── pdf_database_agent.py       # PDF RAG chain builder
 ├── .images/
 │   └── app.png              # UI preview
 ├── requirements.txt
