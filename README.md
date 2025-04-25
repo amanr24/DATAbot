@@ -1,8 +1,3 @@
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)]
-[![Issues](https://img.shields.io/github/issues/your-username/data-chatbot)](https://github.com/your-username/data-chatbot/issues)
-[![Stars](https://img.shields.io/github/stars/your-username/data-chatbot?style=social)](https://github.com/your-username/data-chatbot/stargazers)
-
 # DATAbot
 
 A Streamlit-based data assistant that lets you upload CSVs and PDFs, then ask natural-language questions about your data.  
