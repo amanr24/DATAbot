@@ -1,28 +1,52 @@
-# optimized_sql_agent.py
+'''
+sql_database_agent.py
+
+Defines SQLDatabaseAgent for generating and executing SQL queries on a multi-table SQLite database.
+Features smart schema filtering, SQL generation via LLM, auto-fixing broken queries, and result retrieval.
+'''
+
 import json
-import pandas as pd
 import re
+import pandas as pd
 from tools.sql import get_db_metadata
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 
+
 class SQLDatabaseAgent:
+    '''
+    Agent to interact with a SQLite database via LLM-generated SQL.
+
+    Capabilities:
+    - Load and cache database metadata
+    - Smart-filter schema based on user query
+    - Generate SQL query with joins and filters
+    - Auto-fix broken SQL up to 5 attempts
+    - Execute query and return results
+    '''
     def __init__(self, llm, conn, smart_filtering=True):
+        # LLM instance for prompt invocations
         self.llm = llm
+        # Active SQLAlchemy connection
         self.conn = conn
+        # Toggle schema filtering via LLM
         self.smart_filtering = smart_filtering
+        # Raw metadata from database (schemas, tables, columns)
         self.raw_metadata = get_db_metadata(conn)
         self.filtered_metadata = None
         self.user_query = ""
 
-    def smart_filter_schema(self, user_query):
+    def smart_filter_schema(self, user_query: str) -> dict:
+        '''
+        Filters raw_metadata to relevant tables/columns for the given user_query.
+        Returns JSON-like dict with pared-down schema.
+        '''
         if not self.smart_filtering:
+            # Skip filtering if disabled
             self.filtered_metadata = self.raw_metadata
             return self.filtered_metadata
-        print("userquery = ", user_query)
-        print("self.raw_metadata = ", self.raw_metadata)
 
-        # Filter metadata to relevant tables/columns for the query
+        # Prompt to select relevant schema parts
         filter_prompt = PromptTemplate(
             template="""
             You are an expert database assistant. The database contains multiple tables loaded from CSV files.
@@ -53,14 +77,17 @@ class SQLDatabaseAgent:
             "user_query": user_query,
             "metadata_json": json.dumps(self.raw_metadata)
         })
-        print("self.filtered_metadata = ", self.filtered_metadata)
-
         return self.filtered_metadata
 
     def get_filtered_metadata(self):
+        '''Return filtered metadata or raw if none.'''        
         return self.filtered_metadata or self.raw_metadata
 
-    def generate_sql_query(self, user_query):
+    def generate_sql_query(self, user_query: str) -> str:
+        '''
+        Generates an SQL query for the user_question based on filtered_metadata.
+        Returns the query wrapped in a ```sql ... ``` block.
+        '''
         self.user_query = user_query
         metadata = self.get_filtered_metadata()
 
@@ -103,8 +130,11 @@ Return:
         })
         return sql_query
 
-    def fix_sql_database_code(self, sql_query, error):
-        # Fix broken SQL queries by prompting LLM
+    def fix_sql_database_code(self, sql_query: str, error: Exception) -> str:
+        '''
+        Attempts to fix a broken SQL query based on the given error.
+        Returns corrected SQL code only.
+        '''
         fix_prompt = PromptTemplate(
             input_variables=["sql_query", "error", "user_query", "metadata_json"],
             template="""
@@ -141,23 +171,22 @@ GUIDELINES:
         })
         return fixed_sql
 
-    def run_sql_query(self, sql_query):
+    def run_sql_query(self, sql_query: str):
+        '''
+        Executes the SQL query, auto-fixing errors up to 5 retries.
+        Returns (DataFrame, executed_query) or error string.
+        '''
         # Extract SQL from ```sql``` block
         match = re.search(r"```sql\s*(.*?)\s*```", sql_query, re.DOTALL)
         query = match.group(1).strip() if match else sql_query.strip()
-        print("query : ",query)
 
         # Try executing and auto-fix on failure
         for attempt in range(5):
             try:
-                print("\n\n----------------------------------------")
                 result = pd.read_sql_query(query, self.conn)
-                print("try result = ",result )
-                print("try query = ",query)
-
                 return result, query
             except Exception as e:
-                print("\n\nerror = ",e)
+                # Fix and update query
                 sql_query = self.fix_sql_database_code(query, e)
                 match = re.search(r"```sql\s*(.*?)\s*```", sql_query, re.DOTALL)
                 match1 = re.search(r"```\n(.*?)```", sql_query, re.DOTALL)
@@ -167,15 +196,11 @@ GUIDELINES:
                     query = match1.group(1).strip() if match else sql_query.strip()
                 else:
                     query = self.fix_sql_database_code(query, e)
-                print("fixed query = ", query)
 
         # Final attempt
         try:
             result = pd.read_sql_query(query, self.conn)
-            print("try final result = ",result)
-            print("try final query = ",query)
             return result, query
         except Exception as final_error:
+            # Return error message if still failing
             return f"Final SQL error: {final_error}"
-
-
