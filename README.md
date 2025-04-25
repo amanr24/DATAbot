@@ -112,3 +112,10 @@ streamlit run src/app.py
 ## ⚖️ License
 
 This project is licensed under the [MIT License](LICENSE).  
+
+---
+
+## Acknowledgements
+- Built with Streamlit
+- Powered by LangChain and Groq
+- Thanks to the contributors and the open-source community for their support.
