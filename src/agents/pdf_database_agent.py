@@ -170,7 +170,7 @@ def build_rag_index_for_multiple(pdf_paths: List[str], api_key: str) -> Retrieva
 
     llm = ChatGroq(
         model="llama3-70b-8192",
-        api_key=api  # Use env var for safety
+        api_key=api_key  # Use env var for safety
     )
 
     prompt = PromptTemplate(
