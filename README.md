@@ -44,6 +44,13 @@ Try the live version of DATAbot on Hugging Face Spaces:
 
 ---
 
+## 🎬 Demo Video
+
+[](/videos/demo.mp4)
+
+
+---
+
 ## ⚙️ Installation
 
 ```bash
