@@ -20,14 +20,9 @@ class TextToSpeechRenderer:
             id_suffix (str): Unique suffix to differentiate multiple buttons.
         '''
         # Escape HTML to prevent injection, remove markdown symbols and newlines
-        clean_text = html_escape.escape(
-            message.replace("*", "").replace("-", "").replace("\n", " ")
-        )
+        clean_text = html_escape.escape(message.replace("*", "").replace("-", "").replace("\n", " "))
 
-        # Show the original message in Streamlit markdown
         st.markdown(message)
-
-        # Build HTML + JS to control browser TTS
         html_code = f"""
         <div style='margin-bottom: 1em;'>
             <button id='btn_{id_suffix}' onclick="toggleSpeak_{id_suffix}()" style="background: transparent; border: none; font-size: 16px; cursor: pointer; color: inherit;">🔊 </button>
@@ -46,18 +41,24 @@ class TextToSpeechRenderer:
 
                     function selectVoiceAndSpeak() {{
                         const voices = speechSynthesis.getVoices();
-                        const selected = voices.find(v => v.lang.toLowerCase().includes('{self.lang}'.toLowerCase()));
+                        console.log("🗣️ Available voices:");
+                        voices.forEach(v => console.log(v.lang + " - " + v.name));
+                        let selected = voices.find(v => v.lang.toLowerCase().includes('{self.lang}'.toLowerCase()));
+
+                        if (!selected) {{
+                            console.warn("⚠️ No matching voice found for '{self.lang}', falling back to 'en-US'");
+                            selected = voices.find(v => v.lang === 'en-US') || voices[0];
+                        }}
 
                         if (selected) {{
                             speakMsg_{id_suffix}.voice = selected;
                             console.log("✅ Using voice: " + selected.name + " | " + selected.lang);
+                            speechSynthesis.speak(speakMsg_{id_suffix});
+                            isSpeaking_{id_suffix} = true;
+                            document.getElementById('btn_{id_suffix}').innerText = '⏹️';
                         }} else {{
-                            console.warn("⚠️ No matching voice found for {self.lang}. Using default.");
+                            alert("❌ No voice found. Try changing your system TTS settings.");
                         }}
-
-                        speechSynthesis.speak(speakMsg_{id_suffix});
-                        isSpeaking_{id_suffix} = true;
-                        document.getElementById('btn_{id_suffix}').innerText = '⏹️';
                     }}
 
                     speakMsg_{id_suffix}.onend = function() {{
@@ -74,6 +75,4 @@ class TextToSpeechRenderer:
             </script>
         </div>
         """
-        # Render the HTML snippet in Streamlit
         html(html_code, height=120)
-        
