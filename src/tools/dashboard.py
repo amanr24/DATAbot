@@ -1,4 +1,3 @@
-# dashboard.py
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -6,6 +5,8 @@ import seaborn as sns
 import numpy as np
 from datetime import datetime
 import pickle
+from ydata_profiling import ProfileReport
+import streamlit.components.v1 as components
 
 try:
     from prophet import Prophet
@@ -14,14 +15,13 @@ except ImportError:
     PROPHET_AVAILABLE = False
 
 try:
-    from pycaret.classification import predict_model as predict_model_cls
-    from pycaret.regression import predict_model as predict_model_reg
+    from pycaret.classification import setup as cls_setup, compare_models as cls_compare, save_model as cls_save, predict_model as predict_model_cls, pull as cls_pull, get_leaderboard as cls_leaderboard
+    from pycaret.regression import setup as reg_setup, compare_models as reg_compare, save_model as reg_save, predict_model as predict_model_reg, pull as reg_pull, get_leaderboard as reg_leaderboard
 except ImportError:
     predict_model_cls = None
     predict_model_reg = None
 
-# Helper for ML-based imputation of target column# ✅ Cached ML-based imputation of target column
-@st.cache_data(show_spinner=True)
+# Helper for ML-based imputation of target column
 def ml_impute_target(df, target):
     from pycaret.regression import setup, compare_models, predict_model
     train_df = df[df[target].notnull()]
@@ -29,7 +29,7 @@ def ml_impute_target(df, target):
     if len(test_df) == 0:
         return df
     feature_cols = [col for col in df.columns if col != target]
-    s = setup(data=train_df, target=target, silent=True, session_id=123, fold=3, train_size=0.8, normalize=True)
+    s = setup(data=train_df, target=target, session_id=123, fold=3, train_size=0.8, normalize=True)
     best_model = compare_models()
     preds = predict_model(best_model, data=test_df[feature_cols])
     df.loc[df[target].isnull(), target] = preds['Label']
@@ -40,18 +40,79 @@ def render_dashboard(df: pd.DataFrame):
         st.warning("Please upload a valid CSV file with data before proceeding.")
         st.stop()
     st.header("📊 DataBot Dashboard")
-    tabs = st.tabs(["EDA", "AutoML", "What-If Simulator", "Forecast Playground"])
+    tabs = st.tabs(["Data Cleaning & AutoML", "What-If Simulator", "Forecast Playground"])
 
-    # --- Data Cleaning is now part of AutoML tab ---
-
-    # EDA Tab
+    # --- Data Cleaning & AutoML Tab ---
     with tabs[0]:
-        st.subheader("Exploratory Data Analysis (EDA)")
-        st.markdown("You can clean your data in the AutoML tab. EDA always shows the latest cleaned dataset.")
+        st.subheader("Data Cleaning, EDA & AutoML")
         if 'cleaned_df' in st.session_state:
             cleaned_df = st.session_state['cleaned_df']
         else:
             cleaned_df = df.copy()
+        # --- Data Cleaning ---
+        st.markdown("### Data Cleaning")
+        cleaning_method = st.selectbox(
+            "Select Data Cleaning Method for Missing Values",
+            ["Auto (Recommended)", "Drop Rows with Missing Values", "Fill with Mean", "Fill with Median", "Fill with Mode", "Custom Value for Each Column"]
+        )
+        cleaned_df = cleaned_df.copy()
+        if cleaning_method == "Auto (Recommended)":
+            for col in cleaned_df.columns:
+                if cleaned_df[col].dtype == 'O':
+                    cleaned_df[col] = pd.to_numeric(cleaned_df[col], errors='ignore')
+                    if cleaned_df[col].dtype == 'O':
+                        cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mode()[0] if cleaned_df[col].mode().size > 0 else "Unknown")
+                elif pd.api.types.is_numeric_dtype(cleaned_df[col]):
+                    cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].median())
+                else:
+                    cleaned_df[col] = cleaned_df[col].fillna("Unknown")
+            st.success("Auto-cleaned: Numeric columns filled with median, categoricals with mode.")
+        elif cleaning_method == "Drop Rows with Missing Values":
+            cleaned_df = cleaned_df.dropna()
+            st.success("Dropped all rows with missing values.")
+        elif cleaning_method == "Fill with Mean":
+            for col in cleaned_df.select_dtypes(include=['number']).columns:
+                cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mean())
+            for col in cleaned_df.select_dtypes(include=['object', 'category']).columns:
+                cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mode()[0] if cleaned_df[col].mode().size > 0 else "Unknown")
+            st.success("Filled numeric columns with mean, categoricals with mode.")
+        elif cleaning_method == "Fill with Median":
+            for col in cleaned_df.select_dtypes(include=['number']).columns:
+                cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].median())
+            for col in cleaned_df.select_dtypes(include=['object', 'category']).columns:
+                cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mode()[0] if cleaned_df[col].mode().size > 0 else "Unknown")
+            st.success("Filled numeric columns with median, categoricals with mode.")
+        elif cleaning_method == "Fill with Mode":
+            for col in cleaned_df.columns:
+                cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mode()[0] if cleaned_df[col].mode().size > 0 else "Unknown")
+            st.success("Filled all columns with mode.")
+        elif cleaning_method == "Custom Value for Each Column":
+            custom_values = {}
+            for col in cleaned_df.columns:
+                if pd.api.types.is_numeric_dtype(cleaned_df[col]):
+                    val = st.text_input(f"Custom value for {col} (numeric)", value="", key=f"custom_{col}")
+                    if val != "":
+                        try:
+                            val = float(val)
+                            custom_values[col] = val
+                        except Exception:
+                            st.warning(f"Invalid numeric value for {col}, skipping.")
+                else:
+                    val = st.text_input(f"Custom value for {col} (categorical)", value="", key=f"custom_{col}")
+                    if val != "":
+                        custom_values[col] = val
+            if st.button("Apply Custom Values"):
+                for col, val in custom_values.items():
+                    cleaned_df[col] = cleaned_df[col].fillna(val)
+                st.success("Filled missing values with custom values where provided.")
+        # Convert datetime columns to string to avoid serialization errors
+        for col in cleaned_df.columns:
+            if np.issubdtype(cleaned_df[col].dtype, np.datetime64):
+                cleaned_df[col] = cleaned_df[col].astype(str)
+        # Encode all categorical columns
+        for col in cleaned_df.select_dtypes(include=['object', 'category']).columns:
+            cleaned_df[col] = cleaned_df[col].astype('category').cat.codes
+        st.session_state['cleaned_df'] = cleaned_df
         st.write("Shape:", cleaned_df.shape)
         st.write("Summary Statistics:")
         st.dataframe(cleaned_df.describe(include='all'))
@@ -71,263 +132,346 @@ def render_dashboard(df: pd.DataFrame):
             fig = sns.pairplot(cleaned_df[numeric_cols].dropna())
             st.pyplot(fig)
         st.markdown("---")
+        # Show cleaned data preview and missing values summary
+        st.markdown("#### Cleaned Data Preview (used for AutoML)")
+        st.dataframe(cleaned_df.head(30))
+        st.markdown(f"**Total Rows:** {cleaned_df.shape[0]}, **Total Columns:** {cleaned_df.shape[1]}")
+        missing_per_col = cleaned_df.isnull().sum()
+        total_missing_rows = (cleaned_df.isnull().sum(axis=1) > 0).sum()
+        st.markdown(f"**Rows with any missing values:** {total_missing_rows}")
+        st.markdown("**Missing values per column:")
+        st.dataframe(missing_per_col)
+        # Data Quality Metrics
+        st.markdown("**Data Quality Metrics:**")
+        def get_quality_metrics(df):
+            metrics = {}
+            for col in df.columns:
+                data = df[col]
+                missing = data.isnull().mean() * 100
+                n_unique = data.nunique(dropna=True)
+                if pd.api.types.is_numeric_dtype(data):
+                    skew = data.dropna().skew()
+                    q1 = data.dropna().quantile(0.25)
+                    q3 = data.dropna().quantile(0.75)
+                    iqr = q3 - q1
+                    outliers = ((data < (q1 - 1.5*iqr)) | (data > (q3 + 1.5*iqr))).sum() / data.dropna().shape[0] * 100 if data.dropna().shape[0] > 0 else 0
+                else:
+                    skew = 0
+                    outliers = 0
+                metrics[col] = {
+                    'Missing %': missing,
+                    'Cardinality': n_unique,
+                    'Skewness': abs(skew),
+                    'Outliers %': outliers
+                }
+            return pd.DataFrame(metrics).T
+        st.dataframe(get_quality_metrics(cleaned_df))
+        st.markdown("---")
+        # Download cleaned dataset
         st.download_button(
             "Download Cleaned Dataset as CSV",
             cleaned_df.to_csv(index=False),
             "cleaned_data.csv",
             key="eda_cleaned_download"
         )
-    
-    # AutoML Tab (includes Data Cleaning)
-    with tabs[1]:
-        st.subheader("AutoML (PyCaret) + Data Cleaning")
-        st.markdown("Clean your data, then run AutoML. All downstream features use the cleaned dataset.")
-        cleaned_df = df.copy()
-        cleaning_action = st.radio(
-            "Select Data Cleaning Action",
-            ("None", "Drop Rows with Missing Values", "Fill Missing Values", "AutoML Fill Target"),
-            horizontal=True
-        )
-        if cleaning_action == "Drop Rows with Missing Values":
-            cleaned_df = cleaned_df.dropna()
-            st.success("Dropped rows with missing values.")
-        elif cleaning_action == "Fill Missing Values":
-            impute_method = st.selectbox(
-                "Imputation Method",
-                ("Auto", "Mean", "Median", "Mode", "Custom Value"),
-                help="Choose how to fill missing values. 'Auto' uses mean/median for numeric and mode for categorical columns."
-            )
-            custom_value = None
-            if impute_method == "Custom Value":
-                col_types = cleaned_df.dtypes
-                for col in cleaned_df.columns:
-                    if cleaned_df[col].isnull().any():
-                        if pd.api.types.is_numeric_dtype(cleaned_df[col]):
-                            val = st.text_input(f"Enter numeric value for {col}", key=f"custom_{col}")
-                            try:
-                                val = float(val) if val != '' else None
-                            except Exception:
-                                val = None
-                            if val is not None:
-                                cleaned_df[col] = cleaned_df[col].fillna(val)
-                            elif val == '':
-                                pass
-                            else:
-                                st.warning(f"Please enter a valid numeric value for {col}.")
-                        else:
-                            val = st.text_input(f"Enter string value for {col}", key=f"custom_{col}")
-                            if val:
-                                cleaned_df[col] = cleaned_df[col].fillna(val)
-                if st.button("Apply Imputation"):
-                    st.success("Filled missing values with custom values (validated by type).")
-            else:
-                if st.button("Apply Imputation"):
-                    if impute_method == "Auto":
-                        for col in cleaned_df.columns:
-                            if cleaned_df[col].isnull().any():
-                                if pd.api.types.is_numeric_dtype(cleaned_df[col]):
-                                    cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mean())
-                                else:
-                                    cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mode().iloc[0])
-                        st.success("Auto-imputation applied: mean/median for numeric, mode for categorical.")
-                    elif impute_method == "Mean":
-                        for col in cleaned_df.select_dtypes(include=[np.number]).columns:
-                            cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mean())
-                        st.success("Filled numeric columns with mean.")
-                    elif impute_method == "Median":
-                        for col in cleaned_df.select_dtypes(include=[np.number]).columns:
-                            cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].median())
-                        st.success("Filled numeric columns with median.")
-                    elif impute_method == "Mode":
-                        for col in cleaned_df.columns:
-                            cleaned_df[col] = cleaned_df[col].fillna(cleaned_df[col].mode().iloc[0])
-                        st.success("Filled all columns with mode.")
-        elif cleaning_action == "AutoML Fill Target":
-            target_col = st.selectbox("Select Target Column to Impute with AutoML", options=[col for col in cleaned_df.columns if cleaned_df[col].isnull().sum() > 0], help="Only columns with missing values are shown.")
-            if st.button("Run AutoML Imputation"):
-                with st.spinner("Running AutoML to fill missing values in target column..."):
-                    cleaned_df = ml_impute_target(cleaned_df, target_col)
-                st.success(f"Filled missing values in '{target_col}' using AutoML regression.")
-        else:
-            st.info("No cleaning action applied.")
-        
-        st.session_state['cleaned_df'] = cleaned_df
-        st.write("Preview Cleaned Data:")
-        st.dataframe(cleaned_df.head())
         st.markdown("---")
-        st.download_button(
-            "Download Cleaned Dataset as CSV",
-            cleaned_df.to_csv(index=False),
-            "cleaned_data.csv",
-            key="automl_cleaned_download"
+        # --- AutoML ---
+        st.markdown("### AutoML (PyCaret)")
+        st.info("AutoML will use the cleaned dataset above.")
+        fast_mode = st.checkbox("Fast Mode (fewer models, faster results)", value=True)
+        target_col = st.selectbox("Select Target Column for AutoML", cleaned_df.columns)
+        feature_cols = st.multiselect(
+            "Select Features (leave blank for all except target)",
+            [col for col in cleaned_df.columns if col != target_col],
+            help="Choose which features to use for modeling."
         )
-
-        st.markdown("---")
-        st.subheader("AutoML")
-
-        # --- AutoML Target and Task Suggestion ---
-        # Analyze columns for best regression/classification target
-        classification_candidates = []
-        regression_candidates = []
-        for col in cleaned_df.columns:
-            nunique = cleaned_df[col].nunique(dropna=True)
-            if pd.api.types.is_numeric_dtype(cleaned_df[col]):
-                if nunique <= 20 and nunique > 1:
-                    classification_candidates.append((col, nunique, 'numeric'))
-                elif nunique > 20:
-                    regression_candidates.append((col, nunique, 'numeric'))
-            elif pd.api.types.is_object_dtype(cleaned_df[col]) or pd.api.types.is_categorical_dtype(cleaned_df[col]):
-                if nunique <= 20 and nunique > 1:
-                    classification_candidates.append((col, nunique, 'categorical'))
-        suggested_task = None
-        suggested_target = None
-        if classification_candidates:
-            suggested_task = 'Classification'
-            suggested_target = classification_candidates[0][0]
-        elif regression_candidates:
-            suggested_task = 'Regression'
-            suggested_target = regression_candidates[0][0]
-        st.markdown("**AutoML Suggestions:**")
-        if suggested_task and suggested_target:
-            st.info(f"Suggested Task: {suggested_task} | Suggested Target: {suggested_target}")
-        else:
-            st.warning("No clear target column found for classification or regression. Please select manually.")
-
-        module = st.selectbox(
-            "Select AutoML Task Type",
-            ["Classification", "Regression", "Clustering"],
-            index=["Classification", "Regression", "Clustering"].index(suggested_task) if suggested_task else 0,
-            help="Choose the type of ML problem you want to solve."
-        )
-        target = None
-        if module != "Clustering":
-            default_target = suggested_target if suggested_target and suggested_task == module else None
-            target = st.selectbox("Select Target Column", options=cleaned_df.columns, index=list(cleaned_df.columns).index(default_target) if default_target else 0, help="This is the column you want to predict.")
-        features = st.multiselect(
-            "Select Features to Include (leave blank for all)",
-            options=[col for col in cleaned_df.columns if col != target],
-            help="You can restrict AutoML to specific columns if you want."
-        )
-        if features:
-            X = cleaned_df[features]
-            if target:
-                X[target] = cleaned_df[target]
-            data = X
-        else:
-            data = cleaned_df
-        if module != "Clustering" and target is not None:
-            if data[target].isnull().any():
-                st.warning(f"{data[target].isnull().sum()} missing values found in the target column '{target}'. These rows will be removed automatically for AutoML.")
-                data = data[data[target].notnull()]
-        st.markdown("**Preprocessing Options**")
-        normalize = st.checkbox("Normalize/Scale Numeric Features", value=True)
-        split = st.slider("Train/Test Split %", min_value=50, max_value=90, value=80, step=5)
-        folds = st.number_input("Cross-Validation Folds", min_value=2, max_value=10, value=5)
-        st.markdown("**Advanced Options**")
-        custom_metric = st.text_input("Custom Metric (optional)", help="e.g. 'AUC', 'F1', 'RMSE'")
+        test_size = st.slider("Test Size (percent for test set)", min_value=10, max_value=50, value=20, step=5)
+        folds = st.number_input("Cross-Validation Folds", min_value=2, max_value=10, value=3 if fast_mode else 5)
+        st.write(f"Features: {feature_cols if feature_cols else 'All except target'} | Test Size: {test_size}% | Folds: {folds}")
         if st.button("Run AutoML"):
-            with st.spinner("Running AutoML. Please wait..."):
-                try:
-                    if module == "Classification":
-                        from pycaret.classification import setup, compare_models, pull, get_leaderboard, plot_model, save_model, load_model
-                    elif module == "Regression":
-                        from pycaret.regression import setup, compare_models, pull, get_leaderboard, plot_model, save_model, load_model
-                    else:
-                        from pycaret.clustering import setup, create_model, pull, get_leaderboard, plot_model, save_model, load_model
-                    setup_kwargs = dict(
-                        data=data,
-                        session_id=123,
-                        fold=folds,
-                        train_size=split/100,
-                        normalize=normalize
-                    )
-                    if module != "Clustering":
-                        setup_kwargs["target"] = target
-                    s = setup(**setup_kwargs)
-                    if module == "Clustering":
-                        best_model = create_model("kmeans")
-                    else:
-                        if custom_metric:
-                            try:
-                                best_model = compare_models(sort=custom_metric)
-                            except Exception:
-                                st.warning("Custom metric not supported, using default sort.")
-                                best_model = compare_models()
-                        else:
-                            best_model = compare_models()
-                    leaderboard = get_leaderboard()
-                    st.write("Leaderboard:")
-                    st.dataframe(leaderboard)
-                    st.write("Best Model:", best_model)
-                    st.write("Results:")
-                    st.dataframe(pull())
-                    with open("best_model.pkl", "wb") as f:
-                        pickle.dump(best_model, f)
-                    st.success("Best model saved for What-If Scenario Simulator!")
-                    st.markdown("**Model Plots**")
-                    if module != "Clustering":
-                        for plot_type in ["auc", "confusion_matrix", "feature"]:
-                            try:
-                                st.write(f"Plot: {plot_type}")
-                                plot_model(best_model, plot=plot_type, display_format="streamlit")
-                            except Exception:
-                                continue
-                    else:
+            status_placeholder = st.empty()
+            leaderboard_df = None
+            results_df = None
+            best_model = None
+            try:
+                status_placeholder.info("Step 1: Preparing data...")
+                # Prepare data
+                X = cleaned_df.copy()
+                if feature_cols:
+                    X = X[feature_cols + [target_col]]
+                y = X[target_col]
+                # Save feature columns and dtypes for What-If tab
+                X.to_pickle("X_metadata.pkl")
+                y.to_pickle("y_metadata.pkl")
+                from pycaret.classification import setup as cls_setup, compare_models as cls_compare, save_model as cls_save, pull as cls_pull, get_leaderboard as cls_leaderboard
+                from pycaret.regression import setup as reg_setup, compare_models as reg_compare, save_model as reg_save, predict_model as predict_model_reg, pull as reg_pull, get_leaderboard as reg_leaderboard
+                compare_kwargs = {}
+                # Dynamically select available estimators for fast mode
+                if fast_mode:
+                    if y.nunique() <= 20 and y.dtype in [int, float]:
+                        # Classification
                         try:
-                            st.write("Cluster Plot:")
-                            plot_model(best_model, display_format="streamlit")
+                            from pycaret.classification import models as cls_models
+                            available = [m['id'] for m in cls_models()]
+                            fast_models = [m for m in ['lr', 'dt', 'knn', 'ridge', 'lasso', 'rf'] if m in available]
+                            if fast_models:
+                                compare_kwargs['include'] = fast_models
                         except Exception:
-                            pass
-                    st.markdown("---")
-                    st.download_button("Download Leaderboard as CSV", leaderboard.to_csv(index=False), "leaderboard.csv")
-                except Exception as e:
-                    st.error(f"AutoML failed: {e}")
-    
-    # What-If Scenario Simulator Tab
-    with tabs[2]:
-        st.subheader("🤔 What-If Scenario Simulator")
-        st.markdown("Simulate changes in feature values and see how your trained model would respond.")
-        st.info("First, complete Data Cleaning and AutoML to use this feature.")
-        import os
-        model_path = "best_model.pkl"
-        if os.path.exists(model_path):
-            with open(model_path, "rb") as f:
-                best_model = pickle.load(f)
-            st.success("Loaded trained model! Now select feature values to simulate predictions.")
-            sim_features = [col for col in cleaned_df.columns if cleaned_df[col].dtype in [np.float64, np.int64] or cleaned_df[col].dtype == object]
-            input_data = {}
-            for feat in sim_features:
-                if pd.api.types.is_numeric_dtype(cleaned_df[feat]):
-                    min_val = float(cleaned_df[feat].min())
-                    max_val = float(cleaned_df[feat].max())
-                    mean_val = float(cleaned_df[feat].mean())
-                    input_data[feat] = st.slider(f"{feat}", min_value=min_val, max_value=max_val, value=mean_val)
-                else:
-                    options = cleaned_df[feat].dropna().unique().tolist()
-                    if options:
-                        input_data[feat] = st.selectbox(f"{feat}", options)
-            if st.button("Simulate Prediction"):
-                input_df = pd.DataFrame([input_data])
-                result = None
-                try:
-                    if predict_model_cls is not None:
-                        result = predict_model_cls(best_model, data=input_df)
-                    elif predict_model_reg is not None:
-                        result = predict_model_reg(best_model, data=input_df)
-                except Exception:
+                            compare_kwargs = {}
+                    else:
+                        # Regression
+                        try:
+                            from pycaret.regression import models as reg_models
+                            available = [m['id'] for m in reg_models()]
+                            fast_models = [m for m in ['lr', 'dt', 'knn', 'ridge', 'lasso', 'rf'] if m in available]
+                            if fast_models:
+                                compare_kwargs['include'] = fast_models
+                        except Exception:
+                            compare_kwargs = {}
+                if y.nunique() <= 20 and y.dtype in [int, float]:
+                    status_placeholder.info("Step 2: Setting up classification...")
+                    s = cls_setup(X, target=target_col, session_id=123, fold=folds, train_size=1-test_size/100, normalize=True)
+                    status_placeholder.info("Step 3: Comparing classification models...")
                     try:
-                        if predict_model_reg is not None:
-                            result = predict_model_reg(best_model, data=input_df)
+                        best_model = cls_compare(**compare_kwargs)
+                        # Ensure best_model is a single model, not a list/array
+                        if isinstance(best_model, (list, np.ndarray)):
+                            best_model = best_model[0]
                     except Exception:
-                        st.error("Prediction failed. The model may not support this input.")
-                if result is not None:
-                    st.write("Prediction result:")
-                    st.dataframe(result)
+                        status_placeholder.warning("Some estimators not available, running with default models.")
+                        best_model = cls_compare()
+                        if isinstance(best_model, (list, np.ndarray)):
+                            best_model = best_model[0]
+                    leaderboard_df = cls_leaderboard()
+                    results_df = cls_pull()
+                    status_placeholder.info("Step 4: Saving best classification model...")
+                    cls_save(best_model, 'best_model')
+                    status_placeholder.success("Classification model trained and saved as best_model.pkl!")
+                else:
+                    status_placeholder.info("Step 2: Setting up regression...")
+                    s = reg_setup(X, target=target_col, session_id=123, fold=folds, train_size=1-test_size/100, normalize=True)
+                    status_placeholder.info("Step 3: Comparing regression models...")
+                    try:
+                        best_model = reg_compare(**compare_kwargs)
+                        if isinstance(best_model, (list, np.ndarray)):
+                            best_model = best_model[0]
+                    except Exception:
+                        status_placeholder.warning("Some estimators not available, running with default models.")
+                        best_model = reg_compare()
+                        if isinstance(best_model, (list, np.ndarray)):
+                            best_model = best_model[0]
+                    leaderboard_df = reg_leaderboard()
+                    results_df = reg_pull()
+                    status_placeholder.info("Step 4: Saving best regression model...")
+                    reg_save(best_model, 'best_model')
+                    status_placeholder.success("Regression model trained and saved as best_model.pkl!")
+                # Show results
+                if leaderboard_df is not None:
+                    leaderboard_df = leaderboard_df.astype(str)
+                    leaderboard_df = leaderboard_df[~leaderboard_df.iloc[:,0].isin(["Mean", "Std", "mean", "std"])]
+                    st.markdown("#### AutoML Leaderboard")
+                    st.dataframe(leaderboard_df)
+                    st.download_button("Download Leaderboard as CSV", leaderboard_df.to_csv(index=False), "leaderboard.csv")
+                if results_df is not None:
+                    results_df = results_df.astype(str)
+                    results_df = results_df[~results_df.iloc[:,0].isin(["Mean", "Std", "mean", "std"])]
+                    st.markdown("#### Model Results")
+                    st.dataframe(results_df)
+                if best_model is not None:
+                    st.markdown("#### Best Model Summary")
+                    st.write(str(best_model))
+            except Exception as e:
+                status_placeholder.error(f"AutoML failed: {e}\nTrying to auto-fix and re-run...")
+                for col in cleaned_df.columns:
+                    if cleaned_df[col].dtype == 'O':
+                        cleaned_df[col] = cleaned_df[col].astype('category').cat.codes
+                try:
+                    status_placeholder.info("Retry: Preparing data after auto-fix...")
+                    X = cleaned_df.copy()
+                    if feature_cols:
+                        X = X[feature_cols + [target_col]]
+                    y = X[target_col]
+                    # Save feature columns and dtypes for What-If tab
+                    X.to_pickle("X_metadata.pkl")
+                    y.to_pickle("y_metadata.pkl")
+                    if fast_mode:
+                        if y.nunique() <= 20 and y.dtype in [int, float]:
+                            try:
+                                from pycaret.classification import models as cls_models
+                                available = [m['id'] for m in cls_models()]
+                                fast_models = [m for m in ['lr', 'dt', 'knn', 'ridge', 'lasso', 'rf'] if m in available]
+                                if fast_models:
+                                    compare_kwargs['include'] = fast_models
+                            except Exception:
+                                compare_kwargs = {}
+                        else:
+                            try:
+                                from pycaret.regression import models as reg_models
+                                available = [m['id'] for m in reg_models()]
+                                fast_models = [m for m in ['lr', 'dt', 'knn', 'ridge', 'lasso', 'rf'] if m in available]
+                                if fast_models:
+                                    compare_kwargs['include'] = fast_models
+                            except Exception:
+                                compare_kwargs = {}
+                    if y.nunique() <= 20 and y.dtype in [int, float]:
+                        status_placeholder.info("Retry: Setting up classification...")
+                        s = cls_setup(X, target=target_col, session_id=123, fold=folds, train_size=1-test_size/100, normalize=True)
+                        status_placeholder.info("Retry: Comparing classification models...")
+                        try:
+                            best_model = cls_compare(**compare_kwargs)
+                            if isinstance(best_model, (list, np.ndarray)):
+                                best_model = best_model[0]
+                        except Exception:
+                            status_placeholder.warning("Some estimators not available, running with default models.")
+                            best_model = cls_compare()
+                            if isinstance(best_model, (list, np.ndarray)):
+                                best_model = best_model[0]
+                        leaderboard_df = cls_leaderboard()
+                        results_df = cls_pull()
+                        status_placeholder.info("Retry: Saving best classification model...")
+                        cls_save(best_model, 'best_model')
+                        status_placeholder.success("Classification model trained and saved as best_model.pkl!")
+                    else:
+                        status_placeholder.info("Retry: Setting up regression...")
+                        s = reg_setup(X, target=target_col, session_id=123, fold=folds, train_size=1-test_size/100, normalize=True)
+                        status_placeholder.info("Retry: Comparing regression models...")
+                        try:
+                            best_model = reg_compare(**compare_kwargs)
+                            if isinstance(best_model, (list, np.ndarray)):
+                                best_model = best_model[0]
+                        except Exception:
+                            status_placeholder.warning("Some estimators not available, running with default models.")
+                            best_model = reg_compare()
+                            if isinstance(best_model, (list, np.ndarray)):
+                                best_model = best_model[0]
+                        leaderboard_df = reg_leaderboard()
+                        results_df = reg_pull()
+                        status_placeholder.info("Retry: Saving best regression model...")
+                        reg_save(best_model, 'best_model')
+                        status_placeholder.success("Regression model trained and saved as best_model.pkl!")
+                    # Show results
+                    if leaderboard_df is not None:
+                        leaderboard_df = leaderboard_df.astype(str)
+                        leaderboard_df = leaderboard_df[~leaderboard_df.iloc[:,0].isin(["Mean", "Std", "mean", "std"])]
+                        st.markdown("#### AutoML Leaderboard")
+                        st.dataframe(leaderboard_df)
+                        st.download_button("Download Leaderboard as CSV", leaderboard_df.to_csv(index=False), "leaderboard.csv")
+                    if results_df is not None:
+                        results_df = results_df.astype(str)
+                        results_df = results_df[~results_df.iloc[:,0].isin(["Mean", "Std", "mean", "std"])]
+                        st.markdown("#### Model Results")
+                        st.dataframe(results_df)
+                    if best_model is not None:
+                        st.markdown("#### Best Model Summary")
+                        st.write(str(best_model))
+                except Exception as e2:
+                    status_placeholder.error(f"AutoML failed again: {e2}")
+        st.markdown("---")
+        # EDA Report
+        if st.button("Generate EDA Report"):
+            with st.spinner("Generating EDA report..."):
+                profile = ProfileReport(cleaned_df, minimal=True)
+                profile.to_file("eda_report.html")
+                with open("eda_report.html", "r", encoding="utf-8") as f:
+                    html = f.read()
+                st.success("EDA report generated!")
+                st.download_button("Download EDA Report (HTML)", html, "eda_report.html")
+                components.html(html, height=600, scrolling=True)
+        st.markdown("---")
+
+    # What-If Scenario Simulator Tab
+    with tabs[1]:
+        st.header("What-If Scenario Simulator")
+        st.info("Adjust features and predict using the trained model.")
+        import os, pickle
+        model_path = "best_model.pkl"
+        X_meta_path = "X_metadata.pkl"
+        y_meta_path = "y_metadata.pkl"
+        best_model = None
+        X = None
+        y = None
+        # Try to load model and metadata if not in memory
+        if best_model is None or X is None or y is None:
+            if os.path.exists(model_path) and os.path.exists(X_meta_path) and os.path.exists(y_meta_path):
+                try:
+                    if y is not None and y.nunique() <= 20 and y.dtype in [int, float]:
+                        from pycaret.classification import load_model as cls_load
+                        best_model_loaded = cls_load('best_model')
+                    else:
+                        from pycaret.regression import load_model as reg_load
+                        best_model_loaded = reg_load('best_model')
+                    # Ensure we get the model object, not a string
+                    if isinstance(best_model_loaded, str):
+                        st.error("Model loading failed: got a string instead of model object. Please retrain your model.")
+                        best_model = None
+                    else:
+                        best_model = best_model_loaded
+                except Exception as e:
+                    st.error(f"Failed to load model: {e}")
+                    best_model = None
+                X = pd.read_pickle(X_meta_path)
+                y = pd.read_pickle(y_meta_path)
+        if best_model is not None and X is not None and y is not None:
+            # Only use features that the model actually expects
+            try:
+                # Try to get feature names from the model pipeline (works for most PyCaret/sklearn models)
+                if hasattr(best_model, 'feature_names_in_'):
+                    model_features = list(best_model.feature_names_in_)
+                elif hasattr(best_model, 'named_steps') and hasattr(best_model.named_steps, 'final_estimator_') and hasattr(best_model.named_steps.final_estimator_, 'feature_names_in_'):
+                    model_features = list(best_model.named_steps.final_estimator_.feature_names_in_)
+                else:
+                    model_features = list(X.columns)
+            except Exception:
+                model_features = list(X.columns)
+            expected_cols = model_features
+            user_inputs = {}
+            for col in expected_cols:
+                dtype = X[col].dtype if col in X.columns else float
+                if pd.api.types.is_numeric_dtype(dtype):
+                    user_inputs[col] = st.number_input(f"{col}", value=float(X[col].median()) if col in X.columns and not X[col].isnull().all() else 0.0)
+                else:
+                    options = list(X[col].dropna().unique()) if col in X.columns else ["Unknown"]
+                    if not options:
+                        options = ["Unknown"]
+                    user_inputs[col] = st.selectbox(f"{col}", options)
+            if st.button("Predict What-If Scenario"):
+                try:
+                    scenario_df = pd.DataFrame([user_inputs])
+                    # Align columns and dtypes
+                    for col in expected_cols:
+                        if col not in scenario_df.columns:
+                            scenario_df[col] = np.nan
+                        # Convert types to match training
+                        if col in X.columns:
+                            scenario_df[col] = scenario_df[col].astype(X[col].dtype)
+                    scenario_df = scenario_df[expected_cols]
+                    # Ensure best_model is a single model, not a list/array
+                    if isinstance(best_model, (list, np.ndarray)):
+                        best_model = best_model[0]
+                    # Predict
+                    from pycaret.classification import predict_model as cls_predict
+                    from pycaret.regression import predict_model as reg_predict
+                    if y.nunique() <= 20 and y.dtype in [int, float]:
+                        pred = cls_predict(best_model, data=scenario_df)
+                    else:
+                        pred = reg_predict(best_model, data=scenario_df)
+                    prediction = pred.iloc[0,-1]
+                    st.success(f"Prediction: {prediction}")
+                    # Summarize the result
+                    st.markdown("#### Prediction Summary")
+                    st.write(f"Based on your input scenario, the model predicts: **{prediction}**.")
+                    st.write("---")
+                    st.markdown("**Input scenario details:**")
+                    st.dataframe(scenario_df)
+                    if y.nunique() <= 20 and y.dtype in [int, float] and 'Score' in pred.columns:
+                        st.write(f"Probability Score: {pred['Score'].iloc[0]:.2f}")
+                except Exception as e:
+                    st.error(f"Prediction failed. Please check your inputs. Error: {e}")
         else:
-            st.warning("Train and save a model in the AutoML tab first.")
+            st.warning("Train a model first using AutoML.")
 
     # Forecast Playground Tab
-    with tabs[3]:
+    with tabs[2]:
         st.subheader("📈 AI-Powered Forecast Playground")
         st.markdown("Select a time series column and generate interactive forecasts.")
         if not PROPHET_AVAILABLE:
@@ -361,3 +505,6 @@ def render_dashboard(df: pd.DataFrame):
                     st.dataframe(forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].tail(20))
             else:
                 st.warning("No date/time column found in your data.")
+
+if __name__ == "__main__":
+    render_dashboard(pd.DataFrame())
