@@ -11,7 +11,15 @@ A powerful dashboard is also included for AutoML, forecasting, and simulation.
 
 ---
 
+###🌐 Live App
 
+Try the live version of DATAbot on Hugging Face Spaces:
+
+👉 [*Live Demo*](https://huggingface.co/spaces/amanr24/DATAbot)
+
+> No installation needed — upload your files and chat with your data right from your browser.
+
+---
 
 ## 🚀 Features
 
