@@ -17,6 +17,10 @@ Try the live version of DATAbot on Hugging Face Spaces:
 
 ---
 
+## Pipeline
+![pipeline Screenshot](/images/Pipeline.png)
+---
+
 ## 🚀 Features
 
 - **ChatBot Mode**:
